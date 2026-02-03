@@ -5,6 +5,9 @@ import { authCommands } from './commands/auth.js';
 import { merchantCommands } from './commands/merchant.js';
 import { inventoryCommands } from './commands/inventory.js';
 import { ordersCommands } from './commands/orders.js';
+import { paymentsCommands } from './commands/payments.js';
+import { customersCommands } from './commands/customers.js';
+import { employeesCommands } from './commands/employees.js';
 import { reportsCommands } from './commands/reports.js';
 
 const program = new Command();
@@ -18,6 +21,9 @@ program.addCommand(authCommands());
 program.addCommand(merchantCommands());
 program.addCommand(inventoryCommands());
 program.addCommand(ordersCommands());
+program.addCommand(paymentsCommands());
+program.addCommand(customersCommands());
+program.addCommand(employeesCommands());
 program.addCommand(reportsCommands());
 
 program.command('api').description('Raw API access')
