@@ -1,32 +1,22 @@
 import { Command } from 'commander';
-import { createClient } from '../lib/client';
-import { outputTable, error, getOutputFormat } from '../lib/output';
+import { CloverClient } from '../lib/client.js';
+import { formatOutput } from '../lib/output.js';
+import chalk from 'chalk';
 
-export function registerMerchantCommands(program: Command): void {
-  const merchant = program.command('merchant').description('Merchant commands');
+export function merchantCommands(): Command {
+  const merchant = new Command('merchant').description('Merchant information');
 
-  merchant.command('get')
-    .description('Get merchant details')
-    .option('--merchant <id>', 'Merchant ID')
-    .action(async (opts) => {
+  merchant.command('get').description('Get merchant details')
+    .option('--output <format>', 'Output format (json, table)', 'table')
+    .action(async (options) => {
       try {
-        const { client } = await createClient(opts.merchant);
-        const m = await client.getMerchant();
-        if (getOutputFormat() === 'json') {
-          console.log(JSON.stringify(m, null, 2));
-        } else {
-          outputTable(['Field', 'Value'], [
-            ['ID', m.id],
-            ['Name', m.name],
-            ['Phone', m.phoneNumber || '-'],
-            ['Website', m.website || '-'],
-            ['Timezone', m.timezone || '-'],
-            ['Currency', m.defaultCurrency || 'USD'],
-          ]);
-        }
-      } catch (err: unknown) {
-        error((err as Error).message);
+        const client = new CloverClient();
+        formatOutput(await client.getMerchant(), options);
+      } catch (error: any) {
+        console.error(chalk.red('Error: ' + error.message));
         process.exit(1);
       }
     });
+
+  return merchant;
 }

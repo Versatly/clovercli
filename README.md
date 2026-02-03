@@ -1,6 +1,6 @@
 # CloverCLI
 
-A command-line interface for the Clover POS API. Manage merchants, inventory, and orders from your terminal.
+A powerful CLI tool for interacting with Clover POS merchant accounts.
 
 ## Installation
 
@@ -8,114 +8,84 @@ A command-line interface for the Clover POS API. Manage merchants, inventory, an
 npm install -g clovercli
 ```
 
-Or clone and link locally:
-
-```bash
-git clone https://github.com/Versatly/clovercli.git
-cd clovercli
-npm install
-npm run build
-npm link
-```
-
 ## Quick Start
 
-### 1. Authenticate
+1. **Authenticate with your Clover app:**
+   ```bash
+   clovercli auth login --client-id YOUR_APP_ID --client-secret YOUR_APP_SECRET
+   ```
+
+2. **Check your merchant info:**
+   ```bash
+   clovercli merchant get
+   ```
+
+3. **List inventory items:**
+   ```bash
+   clovercli inventory items list
+   ```
+
+## Commands
+
+### Authentication
+- `clovercli auth login` - OAuth login (opens browser)
+- `clovercli auth status` - Check auth status
+- `clovercli auth refresh` - Refresh access token
+- `clovercli auth logout` - Clear stored credentials
+
+### Merchant
+- `clovercli merchant get` - Get merchant details
+
+### Inventory
+- `clovercli inventory items list` - List items
+- `clovercli inventory items get <id>` - Get specific item
+- `clovercli inventory items create --name "Widget" --price 1999` - Create item
+- `clovercli inventory items update <id> --price 2499` - Update item
+- `clovercli inventory items delete <id>` - Delete item
+- `clovercli inventory categories list` - List categories
+- `clovercli inventory categories create --name "Electronics"` - Create category
+
+### Orders
+- `clovercli orders list` - List orders
+- `clovercli orders get <id>` - Get order details
+- `clovercli orders create --total 4999` - Create order
+- `clovercli orders add-item <order_id> --item-id <item_id>` - Add line item
+- `clovercli orders update <id> --note "Rush delivery"` - Update order
+- `clovercli orders delete <id>` - Delete order
+
+### Raw API Access
+- `clovercli api get /v3/merchants/{mId}/items` - Direct API call
+- `clovercli api post /v3/merchants/{mId}/items --data '{"name":"Test","price":100}'`
+
+## Output Formats
 
 ```bash
-clovercli auth login --client-id YOUR_APP_ID --client-secret YOUR_APP_SECRET
-```
-
-This opens a browser for OAuth2 authentication. After authorizing, your credentials are stored securely.
-
-### 2. View Merchant Info
-
-```bash
-clovercli merchant get
-```
-
-### 3. Manage Inventory
-
-```bash
-# List items
-clovercli inventory items list
-
-# Create an item
-clovercli inventory items create --name "Coffee" --price 350 --sku "COF001"
-
-# Update an item
-clovercli inventory items update ITEM_ID --price 400
-```
-
-### 4. Manage Orders
-
-```bash
-# List orders
+# Default: human-readable table
 clovercli orders list
 
-# Create an order
-clovercli orders create --note "Table 5"
+# JSON output
+clovercli orders list --output json
 
-# Add item to order
-clovercli orders add-item ORDER_ID --item-id ITEM_ID --quantity 2
+# Quiet mode (just IDs)
+clovercli orders list --quiet
 ```
-
-## Global Options
-
-| Option | Description |
-|--------|-------------|
-| `-o, --output <format>` | Output format: `json`, `table`, `quiet` (default: table) |
-| `--merchant <id>` | Specify merchant ID (uses default if not provided) |
-| `-V, --version` | Show version |
-| `-h, --help` | Show help |
 
 ## Environment Variables
 
-Instead of using `auth login`, you can set:
-
 ```bash
-export CLOVER_MERCHANT_ID=your_merchant_id
-export CLOVER_ACCESS_TOKEN=your_access_token
-export CLOVER_REGION=us  # us, eu, la, or sandbox
+CLOVER_CLIENT_ID=...
+CLOVER_CLIENT_SECRET=...
+CLOVER_MERCHANT_ID=...
+CLOVER_ACCESS_TOKEN=...
+CLOVER_REGION=us|eu|la|sandbox
 ```
 
 ## Regions
 
-- `us` - United States (default)
+- `us` - North America (default)
 - `eu` - Europe
 - `la` - Latin America
-- `sandbox` - Development/testing
-
-## Commands
-
-### Auth
-- `auth login` - Authenticate via OAuth2
-- `auth status` - Show authentication status
-- `auth refresh` - Refresh access token
-- `auth logout` - Remove stored credentials
-- `auth default <merchant-id>` - Set default merchant
-
-### Merchant
-- `merchant get` - Get merchant details
-
-### Inventory
-- `inventory items list` - List items
-- `inventory items get <id>` - Get item details
-- `inventory items create` - Create item
-- `inventory items update <id>` - Update item
-- `inventory items delete <id>` - Delete item
-- `inventory categories list` - List categories
-- `inventory categories create` - Create category
-- `inventory stock get <item-id>` - Get stock level
-- `inventory stock update <item-id>` - Update stock level
-
-### Orders
-- `orders list` - List orders
-- `orders get <id>` - Get order details
-- `orders create` - Create order
-- `orders update <id>` - Update order
-- `orders delete <id>` - Delete order
-- `orders add-item <order-id>` - Add line item to order
+- `sandbox` - Sandbox/Development
 
 ## License
 

@@ -1,97 +1,92 @@
-import axios from 'axios';
 import express from 'express';
 import open from 'open';
-import type { Region, MerchantCredentials } from '../types/clover';
-import { saveMerchantCredentials, getMerchantCredentials, updateAccessToken } from './config';
+import axios from 'axios';
+import config, { getAuthUrl, getBaseUrl } from './config.js';
+import type { Region, TokenResponse } from '../types/clover.js';
 
-const API_URLS: Record<Region, string> = {
-  us: 'https://api.clover.com',
-  eu: 'https://api.eu.clover.com',
-  la: 'https://api.la.clover.com',
-  sandbox: 'https://apisandbox.dev.clover.com',
-};
+export async function login(clientId: string, clientSecret: string, region: Region): Promise<void> {
+  const app = express();
+  const port = 3000;
+  const redirectUri = `http://localhost:${port}/callback`;
 
-const AUTH_URLS: Record<Region, string> = {
-  us: 'https://www.clover.com',
-  eu: 'https://www.eu.clover.com',
-  la: 'https://www.la.clover.com',
-  sandbox: 'https://sandbox.dev.clover.com',
-};
-
-export function getApiUrl(region: Region): string {
-  return API_URLS[region] || API_URLS.us;
-}
-
-const PORT = 8089;
-const REDIRECT_URI = `http://localhost:${PORT}/callback`;
-
-export async function startOAuthFlow(
-  clientId: string,
-  clientSecret: string,
-  region: Region = 'us'
-): Promise<{ merchantId: string; credentials: MerchantCredentials }> {
-  return new Promise((resolve, reject) => {
-    const app = express();
-    let server: ReturnType<typeof app.listen>;
+  return new Promise<void>((resolve, reject) => {
+    const server = app.listen(port, async () => {
+      const authUrl = getAuthUrl();
+      const url = `${authUrl}/oauth/v2/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code`;
+      console.log('Opening browser for authentication...');
+      console.log('If browser does not open, visit:', url);
+      await open(url);
+    });
 
     app.get('/callback', async (req, res) => {
       const { code, merchant_id } = req.query;
       if (!code || !merchant_id) {
-        res.status(400).send('Missing code or merchant_id');
+        res.send('Authentication failed: Missing code or merchant_id');
+        server.close();
         reject(new Error('Missing code or merchant_id'));
-        server?.close();
         return;
       }
 
       try {
-        const tokenRes = await axios.post(`${API_URLS[region]}/oauth/v2/token`, null, {
-          params: { client_id: clientId, client_secret: clientSecret, code, grant_type: 'authorization_code' }
+        const baseUrl = getBaseUrl();
+        const tokenResponse = await axios.get<TokenResponse>(`${baseUrl}/oauth/v2/token`, {
+          params: { client_id: clientId, client_secret: clientSecret, code },
         });
 
-        const credentials: MerchantCredentials = {
+        const { access_token, refresh_token, expires_in } = tokenResponse.data;
+        const expiresAt = Date.now() + expires_in * 1000;
+
+        const credentials = config.get('credentials') || {};
+        credentials[merchant_id as string] = {
           client_id: clientId,
           client_secret: clientSecret,
-          access_token: tokenRes.data.access_token,
-          refresh_token: tokenRes.data.refresh_token,
-          expires_at: tokenRes.data.expires_in ? Date.now() + tokenRes.data.expires_in * 1000 : undefined,
+          access_token,
+          refresh_token,
+          expires_at: expiresAt,
           region,
         };
 
-        saveMerchantCredentials(String(merchant_id), credentials);
-        res.send('<h1>✓ Authentication successful!</h1><p>You can close this window.</p>');
-        resolve({ merchantId: String(merchant_id), credentials });
-      } catch (err) {
-        res.status(500).send('Token exchange failed');
-        reject(err);
-      } finally {
-        server?.close();
+        config.set('credentials', credentials);
+        config.set('default_merchant', merchant_id as string);
+        config.set('region', region);
+
+        res.send('Authentication successful! You can close this tab.');
+        console.log('Authenticated for merchant:', merchant_id);
+        server.close();
+        resolve();
+      } catch (error: any) {
+        const msg = error.response?.data?.message || error.message;
+        res.send('Authentication failed: ' + msg);
+        server.close();
+        reject(error);
       }
     });
 
-    server = app.listen(PORT, () => {
-      const authUrl = `${AUTH_URLS[region]}/oauth/v2/authorize?client_id=${clientId}&redirect_uri=${REDIRECT_URI}&response_type=code`;
-      console.log(`Opening browser for authorization...`);
-      console.log(`If browser doesn't open, visit: ${authUrl}\n`);
-      open(authUrl).catch(() => {});
-    });
-
-    setTimeout(() => { reject(new Error('OAuth timeout')); server?.close(); }, 5 * 60 * 1000);
+    setTimeout(() => { server.close(); reject(new Error('Auth timeout')); }, 300000);
   });
 }
 
-export async function refreshAccessToken(merchantId: string): Promise<string> {
-  const creds = getMerchantCredentials(merchantId);
-  if (!creds?.refresh_token) throw new Error('No refresh token');
+export async function refreshToken(merchantId: string): Promise<string> {
+  const credentials = config.get('credentials')[merchantId];
+  if (!credentials?.refresh_token) throw new Error('No refresh token available.');
 
-  const res = await axios.post(`${API_URLS[creds.region]}/oauth/v2/refresh`, null, {
-    params: { client_id: creds.client_id, client_secret: creds.client_secret, refresh_token: creds.refresh_token }
+  const baseUrl = getBaseUrl();
+  const response = await axios.get<TokenResponse>(`${baseUrl}/oauth/v2/refresh`, {
+    params: {
+      client_id: credentials.client_id,
+      client_secret: credentials.client_secret,
+      refresh_token: credentials.refresh_token,
+    },
   });
 
-  updateAccessToken(merchantId, res.data.access_token, res.data.expires_in);
-  return res.data.access_token;
-}
-
-export function isTokenExpired(creds: MerchantCredentials): boolean {
-  if (!creds.expires_at) return false;
-  return Date.now() >= creds.expires_at - 300000;
+  const { access_token, refresh_token, expires_in } = response.data;
+  const allCredentials = config.get('credentials');
+  allCredentials[merchantId] = {
+    ...credentials,
+    access_token,
+    refresh_token,
+    expires_at: Date.now() + expires_in * 1000,
+  };
+  config.set('credentials', allCredentials);
+  return access_token;
 }

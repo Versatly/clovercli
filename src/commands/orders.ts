@@ -1,108 +1,83 @@
 import { Command } from 'commander';
-import { createClient } from '../lib/client';
-import { outputTable, success, error, formatPrice, formatDate, getOutputFormat } from '../lib/output';
-import type { Order } from '../types/clover';
+import { CloverClient } from '../lib/client.js';
+import { formatOutput } from '../lib/output.js';
+import chalk from 'chalk';
 
-export function registerOrdersCommands(program: Command): void {
-  const orders = program.command('orders').description('Order commands');
+export function ordersCommands(): Command {
+  const orders = new Command('orders').description('Order management');
 
-  orders.command('list')
-    .description('List orders')
-    .option('--limit <n>', 'Max results', '100')
+  orders.command('list').description('List orders')
+    .option('--limit <n>', 'Max results', '20')
     .option('--offset <n>', 'Offset', '0')
-    .option('--merchant <id>', 'Merchant ID')
-    .action(async (opts) => {
+    .option('--filter <filter>', 'Filter expression')
+    .option('--output <format>', 'Output format', 'table')
+    .option('--quiet', 'Only IDs')
+    .action(async (options) => {
       try {
-        const { client } = await createClient(opts.merchant);
-        const list = await client.listOrders({ limit: parseInt(opts.limit), offset: parseInt(opts.offset) });
-        if (getOutputFormat() === 'json') {
-          console.log(JSON.stringify(list, null, 2));
-        } else {
-          outputTable(['ID', 'Total', 'State', 'Created', 'Note'],
-            list.map((o: Order) => [
-              o.id,
-              o.total ? formatPrice(o.total) : '-',
-              o.state || 'open',
-              o.createdTime ? formatDate(o.createdTime) : '-',
-              (o.note || '-').slice(0, 30)
-            ])
-          );
-        }
-      } catch (err: unknown) { error((err as Error).message); process.exit(1); }
+        const client = new CloverClient();
+        formatOutput(await client.listOrders({ limit: +options.limit, offset: +options.offset, filter: options.filter }), options);
+      } catch (error: any) { console.error(chalk.red('Error: ' + error.message)); process.exit(1); }
     });
 
-  orders.command('get')
-    .description('Get order details')
-    .argument('<order-id>', 'Order ID')
-    .option('--merchant <id>', 'Merchant ID')
-    .action(async (orderId, opts) => {
+  orders.command('get').description('Get order').argument('<id>', 'Order ID')
+    .option('--expand <fields>', 'Expand fields (lineItems,payments)')
+    .option('--output <format>', 'Output format', 'table')
+    .action(async (id: string, options) => {
       try {
-        const { client } = await createClient(opts.merchant);
-        const order = await client.getOrder(orderId);
-        console.log(JSON.stringify(order, null, 2));
-      } catch (err: unknown) { error((err as Error).message); process.exit(1); }
+        const client = new CloverClient();
+        formatOutput(await client.getOrder(id, options.expand), options);
+      } catch (error: any) { console.error(chalk.red('Error: ' + error.message)); process.exit(1); }
     });
 
-  orders.command('create')
-    .description('Create order')
+  orders.command('create').description('Create order')
     .option('--total <cents>', 'Total in cents')
-    .option('--note <note>', 'Order note')
-    .option('--merchant <id>', 'Merchant ID')
-    .action(async (opts) => {
+    .option('--note <note>', 'Note')
+    .option('--output <format>', 'Output format', 'table')
+    .action(async (options) => {
       try {
-        const { client } = await createClient(opts.merchant);
-        const order = await client.createOrder({
-          total: opts.total ? parseInt(opts.total) : undefined,
-          note: opts.note
-        });
-        success(`Created order ${order.id}`);
-        console.log(JSON.stringify(order, null, 2));
-      } catch (err: unknown) { error((err as Error).message); process.exit(1); }
+        const client = new CloverClient();
+        const order: any = {};
+        if (options.total) order.total = +options.total;
+        if (options.note) order.note = options.note;
+        const result = await client.createOrder(order);
+        console.log(chalk.green('Created: ' + result.id));
+        formatOutput(result, options);
+      } catch (error: any) { console.error(chalk.red('Error: ' + error.message)); process.exit(1); }
     });
 
-  orders.command('update')
-    .description('Update order')
-    .argument('<order-id>', 'Order ID')
-    .option('--note <note>', 'Order note')
-    .option('--merchant <id>', 'Merchant ID')
-    .action(async (orderId, opts) => {
-      try {
-        const { client } = await createClient(opts.merchant);
-        await client.updateOrder(orderId, { note: opts.note });
-        success(`Updated order ${orderId}`);
-      } catch (err: unknown) { error((err as Error).message); process.exit(1); }
-    });
-
-  orders.command('delete')
-    .description('Delete order')
-    .argument('<order-id>', 'Order ID')
-    .option('--merchant <id>', 'Merchant ID')
-    .action(async (orderId, opts) => {
-      try {
-        const { client } = await createClient(opts.merchant);
-        await client.deleteOrder(orderId);
-        success(`Deleted order ${orderId}`);
-      } catch (err: unknown) { error((err as Error).message); process.exit(1); }
-    });
-
-  orders.command('add-item')
-    .description('Add line item to order')
-    .argument('<order-id>', 'Order ID')
-    .option('--item-id <id>', 'Item ID')
-    .option('--name <name>', 'Item name')
-    .option('--price <cents>', 'Price in cents')
+  orders.command('add-item').description('Add line item').argument('<order_id>', 'Order ID')
+    .requiredOption('--item-id <id>', 'Item ID')
     .option('--quantity <n>', 'Quantity', '1')
-    .option('--merchant <id>', 'Merchant ID')
-    .action(async (orderId, opts) => {
+    .option('--output <format>', 'Output format', 'table')
+    .action(async (orderId: string, options) => {
       try {
-        const { client } = await createClient(opts.merchant);
-        const lineItem = await client.addLineItem(orderId, {
-          item: opts.itemId ? { id: opts.itemId } : undefined,
-          name: opts.name,
-          price: opts.price ? parseInt(opts.price) : undefined,
-          unitQty: parseInt(opts.quantity)
-        });
-        success(`Added line item ${lineItem.id}`);
-      } catch (err: unknown) { error((err as Error).message); process.exit(1); }
+        const client = new CloverClient();
+        const data = await client.request<any>('POST', '/v3/merchants/{mId}/orders/' + orderId + '/line_items', { item: { id: options.itemId }, quantity: +options.quantity });
+        console.log(chalk.green('Added item to order ' + orderId));
+        formatOutput(data, options);
+      } catch (error: any) { console.error(chalk.red('Error: ' + error.message)); process.exit(1); }
     });
+
+  orders.command('update').description('Update order').argument('<id>', 'Order ID')
+    .option('--note <note>', 'Note')
+    .option('--output <format>', 'Output format', 'table')
+    .action(async (id: string, options) => {
+      try {
+        const client = new CloverClient();
+        const data = await client.request<any>('POST', '/v3/merchants/{mId}/orders/' + id, { note: options.note });
+        console.log(chalk.green('Updated: ' + id));
+        formatOutput(data, options);
+      } catch (error: any) { console.error(chalk.red('Error: ' + error.message)); process.exit(1); }
+    });
+
+  orders.command('delete').description('Delete order').argument('<id>', 'Order ID')
+    .action(async (id: string) => {
+      try {
+        const client = new CloverClient();
+        await client.request<void>('DELETE', '/v3/merchants/{mId}/orders/' + id);
+        console.log(chalk.green('Deleted.'));
+      } catch (error: any) { console.error(chalk.red('Error: ' + error.message)); process.exit(1); }
+    });
+
+  return orders;
 }

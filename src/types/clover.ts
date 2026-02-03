@@ -1,64 +1,64 @@
 export type Region = 'us' | 'eu' | 'la' | 'sandbox';
 
-export interface CloverResponse<T> {
-  elements?: T[];
-  href?: string;
-}
-
 export interface Merchant {
   id: string;
   name: string;
+  owner?: { id: string };
+  address?: { address1?: string; city?: string; state?: string; zip?: string; country?: string };
   phoneNumber?: string;
   website?: string;
-  timezone?: string;
-  defaultCurrency?: string;
 }
 
 export interface Item {
   id: string;
   name: string;
-  price?: number;
+  price: number;
+  priceType?: 'FIXED' | 'VARIABLE' | 'PER_UNIT';
   sku?: string;
+  code?: string;
+  hidden?: boolean;
   available?: boolean;
-}
-
-export interface Category {
-  id: string;
-  name: string;
-  sortOrder?: number;
-}
-
-export interface ItemStock {
-  item?: { id: string };
-  quantity?: number;
 }
 
 export interface Order {
   id: string;
   total?: number;
-  state?: string | null;
+  currency?: string;
+  status?: string;
   note?: string;
   createdTime?: number;
+  lineItems?: { elements: LineItem[] };
 }
 
 export interface LineItem {
   id: string;
-  name?: string;
-  price?: number;
-  unitQty?: number;
+  name: string;
+  price: number;
+  quantity?: number;
 }
 
-export interface MerchantCredentials {
+export interface CloverListResponse<T> {
+  elements: T[];
+  href?: string;
+}
+
+export interface TokenResponse {
+  access_token: string;
+  refresh_token: string;
+  expires_in: number;
+}
+
+export interface CloverCredential {
   client_id: string;
   client_secret: string;
-  access_token: string;
+  access_token?: string;
   refresh_token?: string;
   expires_at?: number;
-  region: Region;
+  region?: Region;
 }
 
-export interface Config {
+export interface CloverConfig {
   default_merchant?: string;
-  region?: Region;
-  credentials: Record<string, MerchantCredentials>;
+  region: Region;
+  credentials: Record<string, CloverCredential>;
 }

@@ -1,28 +1,38 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
-import { setOutputFormat, OutputFormat } from './lib/output';
-import { registerAuthCommands } from './commands/auth';
-import { registerMerchantCommands } from './commands/merchant';
-import { registerInventoryCommands } from './commands/inventory';
-import { registerOrdersCommands } from './commands/orders';
+import chalk from 'chalk';
+import { authCommands } from './commands/auth.js';
+import { merchantCommands } from './commands/merchant.js';
+import { inventoryCommands } from './commands/inventory.js';
+import { ordersCommands } from './commands/orders.js';
 
 const program = new Command();
 
 program
   .name('clovercli')
   .description('Clover POS CLI for merchants and developers')
-  .version('1.0.0')
-  .option('-o, --output <format>', 'Output format (json, table, quiet)', 'table')
-  .hook('preAction', (thisCommand) => {
-    const opts = thisCommand.opts();
-    if (opts.output) {
-      setOutputFormat(opts.output as OutputFormat);
+  .version('1.0.0');
+
+program.addCommand(authCommands());
+program.addCommand(merchantCommands());
+program.addCommand(inventoryCommands());
+program.addCommand(ordersCommands());
+
+program.command('api').description('Raw API access')
+  .argument('<method>', 'HTTP method (get, post, delete)')
+  .argument('<path>', 'API path')
+  .option('--data <json>', 'JSON data')
+  .action(async (method: string, path: string, options) => {
+    try {
+      const { CloverClient } = await import('./lib/client.js');
+      const client = new CloverClient();
+      const data = options.data ? JSON.parse(options.data) : undefined;
+      console.log(JSON.stringify(await client.request(method.toUpperCase(), path, data), null, 2));
+    } catch (error: any) {
+      console.error(chalk.red('Error: ' + error.message));
+      process.exit(1);
     }
   });
 
-registerAuthCommands(program);
-registerMerchantCommands(program);
-registerInventoryCommands(program);
-registerOrdersCommands(program);
-
-program.parse();
+program.parse(process.argv);
+if (!process.argv.slice(2).length) program.outputHelp();

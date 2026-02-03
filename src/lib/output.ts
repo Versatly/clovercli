@@ -1,44 +1,43 @@
 import Table from 'cli-table3';
+import chalk from 'chalk';
 
-export type OutputFormat = 'json' | 'table' | 'quiet';
-let outputFormat: OutputFormat = 'table';
-
-export function setOutputFormat(fmt: OutputFormat): void { outputFormat = fmt; }
-export function getOutputFormat(): OutputFormat { return outputFormat; }
-
-export function formatPrice(cents: number): string {
-  return `$${(cents / 100).toFixed(2)}`;
+export interface OutputOptions {
+  output?: string;
+  quiet?: boolean;
 }
 
-export function formatDate(ts: number): string {
-  return new Date(ts).toLocaleString();
-}
-
-export function output(data: unknown): void {
-  if (outputFormat === 'json') {
-    console.log(JSON.stringify(data, null, 2));
-  } else {
-    console.log(data);
+export function formatOutput(data: unknown, options: OutputOptions): void {
+  if (options.quiet) {
+    if (Array.isArray(data)) {
+      data.forEach((item: any) => console.log(item.id || item));
+    } else if (typeof data === 'object' && data !== null) {
+      console.log((data as any).id || JSON.stringify(data));
+    } else {
+      console.log(data);
+    }
+    return;
   }
-}
 
-export function outputTable(headers: string[], rows: string[][]): void {
-  if (outputFormat === 'json') {
-    const result = rows.map(row => {
-      const obj: Record<string, string> = {};
-      headers.forEach((h, i) => { obj[h] = row[i]; });
-      return obj;
+  if (options.output === 'json') {
+    console.log(JSON.stringify(data, null, 2));
+    return;
+  }
+
+  if (Array.isArray(data)) {
+    if (data.length === 0) {
+      console.log('No results found.');
+      return;
+    }
+    const head = Object.keys(data[0]).filter(k => typeof data[0][k] !== 'object');
+    const table = new Table({ head: head.map(h => chalk.cyan(h.toUpperCase())) });
+    data.forEach((item: any) => table.push(head.map(h => String(item[h] ?? ''))));
+    console.log(table.toString());
+  } else if (typeof data === 'object' && data !== null) {
+    const table = new Table();
+    Object.entries(data).forEach(([key, value]) => {
+      const displayValue = typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value ?? '');
+      table.push([chalk.cyan(key), displayValue]);
     });
-    console.log(JSON.stringify(result, null, 2));
-  } else if (outputFormat === 'quiet') {
-    rows.forEach(row => console.log(row[0]));
-  } else {
-    const table = new Table({ head: headers, style: { head: ['cyan'] } });
-    rows.forEach(row => table.push(row));
     console.log(table.toString());
   }
 }
-
-export function success(msg: string): void { console.log(`✓ ${msg}`); }
-export function error(msg: string): void { console.error(`✗ ${msg}`); }
-export function info(msg: string): void { console.log(`ℹ ${msg}`); }

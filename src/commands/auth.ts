@@ -1,77 +1,60 @@
 import { Command } from 'commander';
-import { startOAuthFlow, refreshAccessToken } from '../lib/auth';
-import { getMerchantCredentials, removeMerchantCredentials, listMerchants, getDefaultMerchant, setDefaultMerchant, resolveMerchantId } from '../lib/config';
-import { success, error, info, outputTable } from '../lib/output';
-import type { Region } from '../types/clover';
+import { login, refreshToken } from '../lib/auth.js';
+import config, { getActiveMerchantId } from '../lib/config.js';
+import type { Region } from '../types/clover.js';
+import chalk from 'chalk';
 
-export function registerAuthCommands(program: Command): void {
-  const auth = program.command('auth').description('Authentication commands');
+export function authCommands(): Command {
+  const auth = new Command('auth').description('Authentication commands');
 
-  auth.command('login')
-    .description('Authenticate with Clover')
-    .requiredOption('--client-id <id>', 'Clover App ID')
-    .requiredOption('--client-secret <secret>', 'Clover App Secret')
+  auth.command('login').description('OAuth login (opens browser)')
+    .option('--client-id <id>', 'Clover App ID')
+    .option('--client-secret <secret>', 'Clover App Secret')
     .option('--region <region>', 'Region (us, eu, la, sandbox)', 'us')
-    .action(async (opts) => {
+    .action(async (options) => {
+      const clientId = options.clientId || process.env.CLOVER_CLIENT_ID;
+      const clientSecret = options.clientSecret || process.env.CLOVER_CLIENT_SECRET;
+      if (!clientId || !clientSecret) {
+        console.error(chalk.red('Error: --client-id and --client-secret required.'));
+        process.exit(1);
+      }
       try {
-        const { merchantId } = await startOAuthFlow(opts.clientId, opts.clientSecret, opts.region as Region);
-        success(`Logged in as merchant ${merchantId}`);
-      } catch (err: unknown) {
-        error((err as Error).message);
+        await login(clientId, clientSecret, options.region as Region);
+        console.log(chalk.green('Login successful!'));
+      } catch (error: any) {
+        console.error(chalk.red('Login failed: ' + error.message));
         process.exit(1);
       }
     });
 
-  auth.command('status')
-    .description('Show authentication status')
+  auth.command('status').description('Check auth status')
     .action(() => {
-      const merchants = listMerchants();
-      const defaultMerchant = getDefaultMerchant();
-      if (merchants.length === 0) {
-        info('Not logged in. Run "clovercli auth login" to authenticate.');
-        return;
+      const mId = getActiveMerchantId();
+      if (!mId) { console.log(chalk.yellow('Not logged in.')); return; }
+      const creds = config.get('credentials')[mId];
+      console.log(chalk.cyan('Merchant ID:'), mId);
+      console.log(chalk.cyan('Region:'), config.get('region'));
+      if (creds?.expires_at) {
+        const expired = Date.now() > creds.expires_at;
+        console.log(chalk.cyan('Token Expires:'), expired ? chalk.red('EXPIRED') : new Date(creds.expires_at).toLocaleString());
       }
-      outputTable(['Merchant ID', 'Default', 'Region'], 
-        merchants.map((m: string) => {
-          const creds = getMerchantCredentials(m);
-          return [m, m === defaultMerchant ? 'Yes' : '', creds?.region || 'us'];
-        })
-      );
     });
 
-  auth.command('refresh')
-    .description('Refresh access token')
-    .option('--merchant <id>', 'Merchant ID')
-    .action(async (opts) => {
+  auth.command('refresh').description('Refresh access token')
+    .action(async () => {
+      const mId = getActiveMerchantId();
+      if (!mId) { console.error(chalk.red('Not logged in.')); process.exit(1); }
       try {
-        const mId = resolveMerchantId(opts.merchant);
-        if (!mId) { error('No merchant specified'); process.exit(1); }
-        await refreshAccessToken(mId);
-        success('Token refreshed');
-      } catch (err: unknown) {
-        error((err as Error).message);
+        await refreshToken(mId);
+        console.log(chalk.green('Token refreshed.'));
+      } catch (error: any) {
+        console.error(chalk.red('Refresh failed: ' + error.message));
         process.exit(1);
       }
     });
 
-  auth.command('logout')
-    .description('Remove stored credentials')
-    .option('--merchant <id>', 'Merchant ID (default: all)')
-    .action((opts) => {
-      if (opts.merchant) {
-        removeMerchantCredentials(opts.merchant);
-        success(`Logged out merchant ${opts.merchant}`);
-      } else {
-        listMerchants().forEach((m: string) => removeMerchantCredentials(m));
-        success('Logged out all merchants');
-      }
-    });
+  auth.command('logout').description('Clear credentials')
+    .action(() => { config.clear(); console.log(chalk.green('Logged out.')); });
 
-  auth.command('default')
-    .description('Set default merchant')
-    .argument('<merchant-id>', 'Merchant ID')
-    .action((merchantId) => {
-      setDefaultMerchant(merchantId);
-      success(`Default merchant set to ${merchantId}`);
-    });
+  return auth;
 }
