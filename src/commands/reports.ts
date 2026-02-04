@@ -5,20 +5,87 @@ import chalk from 'chalk';
 const fmt = (cents: number) => '$' + (cents / 100).toFixed(2);
 const pct = (n: number, total: number) => total > 0 ? ((n / total) * 100).toFixed(1) + '%' : '0%';
 
+// Period shortcuts: today, yesterday, this-week, last-week, this-month, last-month, mtd, ytd
+function parsePeriod(period: string): { from: string; to: string; fromMs: number; toMs: number } {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let fromDate: Date;
+  let toDate: Date = today;
+
+  switch (period.toLowerCase()) {
+    case 'today':
+      fromDate = today;
+      toDate = today;
+      break;
+    case 'yesterday':
+      fromDate = new Date(today.getTime() - 86400000);
+      toDate = fromDate;
+      break;
+    case 'this-week':
+      fromDate = new Date(today.getTime() - (today.getDay() * 86400000));
+      toDate = today;
+      break;
+    case 'last-week':
+      const lastWeekEnd = new Date(today.getTime() - (today.getDay() * 86400000) - 86400000);
+      fromDate = new Date(lastWeekEnd.getTime() - 6 * 86400000);
+      toDate = lastWeekEnd;
+      break;
+    case 'this-month':
+      fromDate = new Date(now.getFullYear(), now.getMonth(), 1);
+      toDate = today;
+      break;
+    case 'last-month':
+      fromDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      toDate = new Date(now.getFullYear(), now.getMonth(), 0);
+      break;
+    case 'mtd': // Month to date
+      fromDate = new Date(now.getFullYear(), now.getMonth(), 1);
+      toDate = today;
+      break;
+    case 'ytd': // Year to date
+      fromDate = new Date(now.getFullYear(), 0, 1);
+      toDate = today;
+      break;
+    default:
+      throw new Error(`Unknown period: ${period}. Use: today, yesterday, this-week, last-week, this-month, last-month, mtd, ytd`);
+  }
+
+  const from = fromDate.toISOString().split('T')[0];
+  const to = toDate.toISOString().split('T')[0];
+  return {
+    from,
+    to,
+    fromMs: fromDate.getTime(),
+    toMs: toDate.getTime() + 86400000
+  };
+}
+
 export function reportsCommands(): Command {
   const reports = new Command('reports').description('Analytics and reporting');
 
   // Sales Summary - Uses PAYMENTS for accuracy
   reports.command('sales')
     .description('Sales summary by date range (uses payments data)')
-    .requiredOption('--from <date>', 'Start date (YYYY-MM-DD)')
-    .requiredOption('--to <date>', 'End date (YYYY-MM-DD)')
+    .option('--from <date>', 'Start date (YYYY-MM-DD)')
+    .option('--to <date>', 'End date (YYYY-MM-DD)')
+    .option('--period <period>', 'Period shortcut: today, yesterday, this-week, last-week, this-month, last-month, mtd, ytd')
     .option('--output <format>', 'Output: table|json', 'table')
     .action(async (opts) => {
       try {
         const client = new CloverClient();
-        const fromMs = new Date(opts.from).getTime();
-        const toMs = new Date(opts.to).getTime() + 86400000;
+        
+        let fromMs: number, toMs: number, fromStr: string, toStr: string;
+        if (opts.period) {
+          const p = parsePeriod(opts.period);
+          fromMs = p.fromMs; toMs = p.toMs; fromStr = p.from; toStr = p.to;
+        } else if (opts.from && opts.to) {
+          fromMs = new Date(opts.from).getTime();
+          toMs = new Date(opts.to).getTime() + 86400000;
+          fromStr = opts.from; toStr = opts.to;
+        } else {
+          console.error(chalk.red('Error: Provide --from/--to or --period'));
+          process.exit(1);
+        }
 
         console.log(chalk.dim('Fetching payments (this may take a moment)...'));
         const payments = await client.listAllPayments({ fromMs, toMs });
@@ -33,12 +100,12 @@ export function reportsCommands(): Command {
 
         if (opts.output === 'json') {
           console.log(JSON.stringify({
-            period: { from: opts.from, to: opts.to },
+            period: { from: fromStr, to: toStr },
             grossSales, netSales, totalRefunds, totalTax, totalTips,
             paymentCount: payments.length, refundCount: refunds.length, avgPayment
           }, null, 2));
         } else {
-          console.log(chalk.bold.cyan('\n📊 Sales Report: ') + opts.from + ' to ' + opts.to);
+          console.log(chalk.bold.cyan('\n📊 Sales Report: ') + fromStr + ' to ' + toStr);
           console.log(chalk.dim('─'.repeat(45)));
           console.log(chalk.cyan('Gross Sales:    ') + chalk.green.bold(fmt(grossSales)));
           console.log(chalk.cyan('Refunds:        ') + chalk.red('-' + fmt(totalRefunds)));
@@ -56,14 +123,25 @@ export function reportsCommands(): Command {
   // Daily breakdown - Uses PAYMENTS
   reports.command('daily')
     .description('Daily breakdown for date range')
-    .requiredOption('--from <date>', 'Start date')
-    .requiredOption('--to <date>', 'End date')
+    .option('--from <date>', 'Start date')
+    .option('--to <date>', 'End date')
+    .option('--period <period>', 'Period shortcut: today, yesterday, this-week, last-week, this-month, last-month, mtd, ytd')
     .option('--output <format>', 'Output: table|json', 'table')
     .action(async (opts) => {
       try {
         const client = new CloverClient();
-        const fromMs = new Date(opts.from).getTime();
-        const toMs = new Date(opts.to).getTime() + 86400000;
+        
+        let fromMs: number, toMs: number;
+        if (opts.period) {
+          const p = parsePeriod(opts.period);
+          fromMs = p.fromMs; toMs = p.toMs;
+        } else if (opts.from && opts.to) {
+          fromMs = new Date(opts.from).getTime();
+          toMs = new Date(opts.to).getTime() + 86400000;
+        } else {
+          console.error(chalk.red('Error: Provide --from/--to or --period'));
+          process.exit(1);
+        }
 
         console.log(chalk.dim('Fetching payments...'));
         const payments = await client.listAllPayments({ fromMs, toMs });
