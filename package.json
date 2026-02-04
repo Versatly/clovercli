@@ -1,14 +1,46 @@
 {
-  "name": "clovercli",
-  "version": "1.0.0",
-  "description": "Clover POS CLI for merchants and developers",
+  "name": "@versatly/clovercli",
+  "version": "1.1.0",
+  "description": "Powerful CLI for Clover POS API - inventory, orders, payments, analytics",
   "main": "dist/index.js",
   "type": "module",
-  "bin": { "clovercli": "dist/index.js" },
-  "scripts": { "build": "tsc", "start": "node dist/index.js" },
-  "engines": { "node": ">=18" },
-  "keywords": ["clover", "pos", "cli"],
+  "bin": {
+    "clovercli": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "clover",
+    "pos",
+    "cli",
+    "point-of-sale",
+    "merchant",
+    "inventory",
+    "orders",
+    "payments",
+    "analytics",
+    "reports"
+  ],
+  "author": "Versatly Holdings",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Versatly/clovercli.git"
+  },
+  "homepage": "https://github.com/Versatly/clovercli#readme",
+  "bugs": {
+    "url": "https://github.com/Versatly/clovercli/issues"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "dependencies": {
     "axios": "^1.6.0",
     "chalk": "^5.3.0",

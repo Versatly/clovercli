@@ -8,9 +8,9 @@ const pct = (n: number, total: number) => total > 0 ? ((n / total) * 100).toFixe
 export function reportsCommands(): Command {
   const reports = new Command('reports').description('Analytics and reporting');
 
-  // Sales Summary
+  // Sales Summary - Uses PAYMENTS for accuracy
   reports.command('sales')
-    .description('Sales summary by date range')
+    .description('Sales summary by date range (uses payments data)')
     .requiredOption('--from <date>', 'Start date (YYYY-MM-DD)')
     .requiredOption('--to <date>', 'End date (YYYY-MM-DD)')
     .option('--output <format>', 'Output: table|json', 'table')
@@ -20,33 +20,40 @@ export function reportsCommands(): Command {
         const fromMs = new Date(opts.from).getTime();
         const toMs = new Date(opts.to).getTime() + 86400000;
 
-        const orders = (await client.listOrders({ limit: 1000 }))
-          .filter(o => (o.createdTime || 0) >= fromMs && (o.createdTime || 0) < toMs);
+        console.log(chalk.dim('Fetching payments (this may take a moment)...'));
+        const payments = await client.listAllPayments({ fromMs, toMs });
+        const refunds = await client.listAllRefunds({ fromMs, toMs });
 
-        const totalSales = orders.reduce((s, o) => s + (o.total || 0), 0);
-        const totalTax = orders.reduce((s, o) => s + (o.taxAmount || 0), 0);
-        const totalTips = orders.reduce((s, o) => s + (o.tipAmount || 0), 0);
-        const avgOrder = orders.length > 0 ? totalSales / orders.length : 0;
+        const grossSales = payments.reduce((s, p) => s + (p.amount || 0), 0);
+        const totalTips = payments.reduce((s, p) => s + (p.tipAmount || 0), 0);
+        const totalTax = payments.reduce((s, p) => s + (p.taxAmount || 0), 0);
+        const totalRefunds = refunds.reduce((s, r) => s + (r.amount || 0), 0);
+        const netSales = grossSales - totalRefunds;
+        const avgPayment = payments.length > 0 ? grossSales / payments.length : 0;
 
         if (opts.output === 'json') {
           console.log(JSON.stringify({
             period: { from: opts.from, to: opts.to },
-            totalSales, totalTax, totalTips, orderCount: orders.length, avgOrder, orders
+            grossSales, netSales, totalRefunds, totalTax, totalTips,
+            paymentCount: payments.length, refundCount: refunds.length, avgPayment
           }, null, 2));
         } else {
           console.log(chalk.bold.cyan('\n📊 Sales Report: ') + opts.from + ' to ' + opts.to);
           console.log(chalk.dim('─'.repeat(45)));
-          console.log(chalk.cyan('Total Sales:    ') + chalk.green.bold(fmt(totalSales)));
+          console.log(chalk.cyan('Gross Sales:    ') + chalk.green.bold(fmt(grossSales)));
+          console.log(chalk.cyan('Refunds:        ') + chalk.red('-' + fmt(totalRefunds)));
+          console.log(chalk.cyan('Net Sales:      ') + chalk.green.bold(fmt(netSales)));
+          console.log(chalk.dim('─'.repeat(45)));
           console.log(chalk.cyan('Total Tax:      ') + fmt(totalTax));
           console.log(chalk.cyan('Total Tips:     ') + fmt(totalTips));
-          console.log(chalk.cyan('Order Count:    ') + orders.length);
-          console.log(chalk.cyan('Avg Order:      ') + fmt(avgOrder));
+          console.log(chalk.cyan('Transactions:   ') + payments.length);
+          console.log(chalk.cyan('Avg Transaction:') + fmt(avgPayment));
           console.log();
         }
       } catch (e: any) { console.error(chalk.red('Error: ' + e.message)); process.exit(1); }
     });
 
-  // Daily breakdown
+  // Daily breakdown - Uses PAYMENTS
   reports.command('daily')
     .description('Daily breakdown for date range')
     .requiredOption('--from <date>', 'Start date')
@@ -58,28 +65,35 @@ export function reportsCommands(): Command {
         const fromMs = new Date(opts.from).getTime();
         const toMs = new Date(opts.to).getTime() + 86400000;
 
-        const orders = (await client.listOrders({ limit: 1000 }))
-          .filter(o => (o.createdTime || 0) >= fromMs && (o.createdTime || 0) < toMs);
+        console.log(chalk.dim('Fetching payments...'));
+        const payments = await client.listAllPayments({ fromMs, toMs });
 
-        const byDay: Record<string, { sales: number; orders: number; tax: number }> = {};
-        orders.forEach(o => {
-          const day = new Date(o.createdTime || 0).toISOString().split('T')[0];
-          if (!byDay[day]) byDay[day] = { sales: 0, orders: 0, tax: 0 };
-          byDay[day].sales += o.total || 0;
-          byDay[day].orders += 1;
-          byDay[day].tax += o.taxAmount || 0;
+        const byDay: Record<string, { sales: number; count: number; tips: number; tax: number }> = {};
+        payments.forEach(p => {
+          const day = new Date(p.createdTime || 0).toISOString().split('T')[0];
+          if (!byDay[day]) byDay[day] = { sales: 0, count: 0, tips: 0, tax: 0 };
+          byDay[day].sales += p.amount || 0;
+          byDay[day].count += 1;
+          byDay[day].tips += p.tipAmount || 0;
+          byDay[day].tax += p.taxAmount || 0;
         });
 
         if (opts.output === 'json') {
           console.log(JSON.stringify(byDay, null, 2));
         } else {
           console.log(chalk.bold.cyan('\n📅 Daily Breakdown\n'));
-          console.log(chalk.dim('Date         | Sales      | Orders | Tax'));
-          console.log(chalk.dim('─'.repeat(50)));
+          console.log(chalk.dim('Date         | Sales       | Txns | Avg     | Tips'));
+          console.log(chalk.dim('─'.repeat(60)));
+          let totalSales = 0, totalTxns = 0;
           Object.keys(byDay).sort().forEach(day => {
             const d = byDay[day];
-            console.log(`${day} | ${fmt(d.sales).padStart(10)} | ${String(d.orders).padStart(6)} | ${fmt(d.tax)}`);
+            const avg = d.count > 0 ? d.sales / d.count : 0;
+            console.log(`${day} | ${fmt(d.sales).padStart(11)} | ${String(d.count).padStart(4)} | ${fmt(avg).padStart(7)} | ${fmt(d.tips)}`);
+            totalSales += d.sales;
+            totalTxns += d.count;
           });
+          console.log(chalk.dim('─'.repeat(60)));
+          console.log(`${'TOTAL'.padEnd(12)} | ${fmt(totalSales).padStart(11)} | ${String(totalTxns).padStart(4)} |`);
           console.log();
         }
       } catch (e: any) { console.error(chalk.red('Error: ' + e.message)); process.exit(1); }
@@ -96,23 +110,22 @@ export function reportsCommands(): Command {
         const dayStart = new Date(opts.date).getTime();
         const dayEnd = dayStart + 86400000;
 
-        const orders = (await client.listOrders({ limit: 500 }))
-          .filter(o => (o.createdTime || 0) >= dayStart && (o.createdTime || 0) < dayEnd);
+        const payments = await client.listAllPayments({ fromMs: dayStart, toMs: dayEnd });
 
-        const byHour: Record<number, { sales: number; orders: number }> = {};
-        for (let h = 0; h < 24; h++) byHour[h] = { sales: 0, orders: 0 };
+        const byHour: Record<number, { sales: number; count: number }> = {};
+        for (let h = 0; h < 24; h++) byHour[h] = { sales: 0, count: 0 };
 
-        orders.forEach(o => {
-          const hour = new Date(o.createdTime || 0).getHours();
-          byHour[hour].sales += o.total || 0;
-          byHour[hour].orders += 1;
+        payments.forEach(p => {
+          const hour = new Date(p.createdTime || 0).getHours();
+          byHour[hour].sales += p.amount || 0;
+          byHour[hour].count += 1;
         });
 
         if (opts.output === 'json') {
           console.log(JSON.stringify({ date: opts.date, hourly: byHour }, null, 2));
         } else {
           console.log(chalk.bold.cyan('\n⏰ Hourly Sales: ') + opts.date + '\n');
-          const total = orders.reduce((s, o) => s + (o.total || 0), 0);
+          const total = payments.reduce((s, p) => s + (p.amount || 0), 0);
           Object.entries(byHour).forEach(([h, d]) => {
             const bar = '█'.repeat(Math.round((d.sales / (total || 1)) * 30));
             const hour = String(h).padStart(2, '0') + ':00';
@@ -133,15 +146,16 @@ export function reportsCommands(): Command {
     .action(async (opts) => {
       try {
         const client = new CloverClient();
-        const orders = await client.listOrders({ limit: 1000 });
+        const fromMs = opts.from ? new Date(opts.from).getTime() : Date.now() - 30 * 86400000;
+        const toMs = opts.to ? new Date(opts.to).getTime() + 86400000 : Date.now() + 86400000;
+
+        console.log(chalk.dim('Fetching orders with line items (this may take a while)...'));
+        const orders = await client.listAllOrders({ fromMs, toMs, limit: 500 });
         
-        // Try to expand line items
         const itemSales: Record<string, { name: string; qty: number; revenue: number }> = {};
         
+        let processed = 0;
         for (const order of orders) {
-          if (opts.from && (order.createdTime || 0) < new Date(opts.from).getTime()) continue;
-          if (opts.to && (order.createdTime || 0) > new Date(opts.to).getTime() + 86400000) continue;
-          
           try {
             const details = await client.request<any>('GET', `/v3/merchants/{mId}/orders/${order.id}?expand=lineItems`);
             const lineItems = details.lineItems?.elements || [];
@@ -151,8 +165,11 @@ export function reportsCommands(): Command {
               itemSales[id].qty += 1;
               itemSales[id].revenue += li.price || 0;
             });
+            processed++;
+            if (processed % 100 === 0) process.stdout.write(chalk.dim(`\rProcessed ${processed}/${orders.length} orders...`));
           } catch { /* skip orders without line items */ }
         }
+        console.log('');
 
         const sorted = Object.values(itemSales).sort((a, b) => b.revenue - a.revenue).slice(0, +opts.limit);
 
@@ -170,7 +187,7 @@ export function reportsCommands(): Command {
       } catch (e: any) { console.error(chalk.red('Error: ' + e.message)); process.exit(1); }
     });
 
-  // Payments breakdown
+  // Payments breakdown by method
   reports.command('payments')
     .description('Payment method breakdown')
     .option('--from <date>', 'Start date')
@@ -179,20 +196,16 @@ export function reportsCommands(): Command {
     .action(async (opts) => {
       try {
         const client = new CloverClient();
-        const payments = await client.request<any>('GET', '/v3/merchants/{mId}/payments?limit=1000');
-        const elements = payments.elements || [];
-
-        const fromMs = opts.from ? new Date(opts.from).getTime() : 0;
+        const fromMs = opts.from ? new Date(opts.from).getTime() : Date.now() - 30 * 86400000;
         const toMs = opts.to ? new Date(opts.to).getTime() + 86400000 : Date.now() + 86400000;
 
-        const filtered = elements.filter((p: any) => 
-          (p.createdTime || 0) >= fromMs && (p.createdTime || 0) < toMs
-        );
+        console.log(chalk.dim('Fetching payments...'));
+        const payments = await client.listAllPayments({ fromMs, toMs });
 
         const byType: Record<string, { count: number; amount: number }> = {};
         let total = 0;
 
-        filtered.forEach((p: any) => {
+        payments.forEach(p => {
           const type = p.tender?.label || p.cardTransaction?.cardType || 'Other';
           if (!byType[type]) byType[type] = { count: 0, amount: 0 };
           byType[type].count += 1;
@@ -201,16 +214,16 @@ export function reportsCommands(): Command {
         });
 
         if (opts.output === 'json') {
-          console.log(JSON.stringify({ total, count: filtered.length, byType }, null, 2));
+          console.log(JSON.stringify({ total, count: payments.length, byType }, null, 2));
         } else {
           console.log(chalk.bold.cyan('\n💳 Payment Methods\n'));
-          console.log(chalk.dim('Method          | Count | Amount     | Share'));
-          console.log(chalk.dim('─'.repeat(50)));
+          console.log(chalk.dim('Method               | Count | Amount      | Share'));
+          console.log(chalk.dim('─'.repeat(55)));
           Object.entries(byType).sort((a, b) => b[1].amount - a[1].amount).forEach(([type, d]) => {
-            console.log(`${type.padEnd(15)} | ${String(d.count).padStart(5)} | ${fmt(d.amount).padStart(10)} | ${pct(d.amount, total)}`);
+            console.log(`${type.padEnd(20)} | ${String(d.count).padStart(5)} | ${fmt(d.amount).padStart(11)} | ${pct(d.amount, total)}`);
           });
-          console.log(chalk.dim('─'.repeat(50)));
-          console.log(`${'TOTAL'.padEnd(15)} | ${String(filtered.length).padStart(5)} | ${fmt(total).padStart(10)} |`);
+          console.log(chalk.dim('─'.repeat(55)));
+          console.log(`${'TOTAL'.padEnd(20)} | ${String(payments.length).padStart(5)} | ${fmt(total).padStart(11)} |`);
           console.log();
         }
       } catch (e: any) { console.error(chalk.red('Error: ' + e.message)); process.exit(1); }
@@ -225,28 +238,22 @@ export function reportsCommands(): Command {
     .action(async (opts) => {
       try {
         const client = new CloverClient();
-        const refunds = await client.request<any>('GET', '/v3/merchants/{mId}/refunds?limit=500');
-        const elements = refunds.elements || [];
-
-        const fromMs = opts.from ? new Date(opts.from).getTime() : 0;
+        const fromMs = opts.from ? new Date(opts.from).getTime() : Date.now() - 30 * 86400000;
         const toMs = opts.to ? new Date(opts.to).getTime() + 86400000 : Date.now() + 86400000;
 
-        const filtered = elements.filter((r: any) => 
-          (r.createdTime || 0) >= fromMs && (r.createdTime || 0) < toMs
-        );
-
-        const totalRefunded = filtered.reduce((s: number, r: any) => s + (r.amount || 0), 0);
+        const refunds = await client.listAllRefunds({ fromMs, toMs });
+        const totalRefunded = refunds.reduce((s, r) => s + (r.amount || 0), 0);
 
         if (opts.output === 'json') {
-          console.log(JSON.stringify({ totalRefunded, count: filtered.length, refunds: filtered }, null, 2));
+          console.log(JSON.stringify({ totalRefunded, count: refunds.length, refunds }, null, 2));
         } else {
           console.log(chalk.bold.cyan('\n🔄 Refunds Summary\n'));
           console.log(chalk.cyan('Total Refunded: ') + chalk.red(fmt(totalRefunded)));
-          console.log(chalk.cyan('Refund Count:   ') + filtered.length);
-          if (filtered.length > 0) {
-            console.log(chalk.cyan('Avg Refund:     ') + fmt(totalRefunded / filtered.length));
+          console.log(chalk.cyan('Refund Count:   ') + refunds.length);
+          if (refunds.length > 0) {
+            console.log(chalk.cyan('Avg Refund:     ') + fmt(totalRefunded / refunds.length));
             console.log(chalk.dim('\nRecent Refunds:'));
-            filtered.slice(0, 10).forEach((r: any) => {
+            refunds.slice(0, 10).forEach((r) => {
               const date = new Date(r.createdTime || 0).toLocaleDateString();
               console.log(`  ${date} - ${fmt(r.amount || 0)} - ${r.reason || 'No reason'}`);
             });
@@ -265,24 +272,24 @@ export function reportsCommands(): Command {
     .action(async (opts) => {
       try {
         const client = new CloverClient();
-        const fromMs = opts.from ? new Date(opts.from).getTime() : 0;
+        const fromMs = opts.from ? new Date(opts.from).getTime() : Date.now() - 30 * 86400000;
         const toMs = opts.to ? new Date(opts.to).getTime() + 86400000 : Date.now() + 86400000;
 
-        const orders = (await client.listOrders({ limit: 1000 }))
-          .filter(o => (o.createdTime || 0) >= fromMs && (o.createdTime || 0) < toMs);
+        console.log(chalk.dim('Fetching payments...'));
+        const payments = await client.listAllPayments({ fromMs, toMs });
 
-        const totalTax = orders.reduce((s, o) => s + (o.taxAmount || 0), 0);
-        const totalSales = orders.reduce((s, o) => s + (o.total || 0), 0);
+        const totalTax = payments.reduce((s, p) => s + (p.taxAmount || 0), 0);
+        const totalSales = payments.reduce((s, p) => s + (p.amount || 0), 0);
         const effectiveRate = totalSales > 0 ? (totalTax / (totalSales - totalTax)) * 100 : 0;
 
         if (opts.output === 'json') {
-          console.log(JSON.stringify({ totalTax, totalSales, effectiveRate: effectiveRate.toFixed(2), orderCount: orders.length }, null, 2));
+          console.log(JSON.stringify({ totalTax, totalSales, effectiveRate: effectiveRate.toFixed(2), paymentCount: payments.length }, null, 2));
         } else {
           console.log(chalk.bold.cyan('\n🧾 Tax Summary\n'));
           console.log(chalk.cyan('Total Tax Collected: ') + chalk.yellow(fmt(totalTax)));
           console.log(chalk.cyan('Total Sales:         ') + fmt(totalSales));
           console.log(chalk.cyan('Effective Tax Rate:  ') + effectiveRate.toFixed(2) + '%');
-          console.log(chalk.cyan('Orders with Tax:     ') + orders.filter(o => (o.taxAmount || 0) > 0).length);
+          console.log(chalk.cyan('Transactions:        ') + payments.length);
           console.log();
         }
       } catch (e: any) { console.error(chalk.red('Error: ' + e.message)); process.exit(1); }
@@ -300,18 +307,24 @@ export function reportsCommands(): Command {
         const weekStart = todayStart - (now.getDay() * 86400000);
         const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
 
-        const orders = await client.listOrders({ limit: 1000 });
+        console.log(chalk.dim('Fetching payments for this month...'));
+        const payments = await client.listAllPayments({ fromMs: monthStart });
+        const refunds = await client.listAllRefunds({ fromMs: monthStart });
         
-        const today = orders.filter(o => (o.createdTime || 0) >= todayStart);
-        const week = orders.filter(o => (o.createdTime || 0) >= weekStart);
-        const month = orders.filter(o => (o.createdTime || 0) >= monthStart);
+        const today = payments.filter(p => (p.createdTime || 0) >= todayStart);
+        const week = payments.filter(p => (p.createdTime || 0) >= weekStart);
+        const month = payments;
 
-        const sum = (arr: any[]) => arr.reduce((s, o) => s + (o.total || 0), 0);
+        const todayRefunds = refunds.filter(r => (r.createdTime || 0) >= todayStart);
+        const weekRefunds = refunds.filter(r => (r.createdTime || 0) >= weekStart);
+        const monthRefunds = refunds;
+
+        const sum = (arr: any[]) => arr.reduce((s, p) => s + (p.amount || 0), 0);
 
         const data = {
-          today: { sales: sum(today), orders: today.length },
-          week: { sales: sum(week), orders: week.length },
-          month: { sales: sum(month), orders: month.length },
+          today: { gross: sum(today), refunds: sum(todayRefunds), net: sum(today) - sum(todayRefunds), txns: today.length },
+          week: { gross: sum(week), refunds: sum(weekRefunds), net: sum(week) - sum(weekRefunds), txns: week.length },
+          month: { gross: sum(month), refunds: sum(monthRefunds), net: sum(month) - sum(monthRefunds), txns: month.length },
         };
 
         if (opts.output === 'json') {
@@ -319,11 +332,11 @@ export function reportsCommands(): Command {
         } else {
           console.log(chalk.bold.cyan('\n📈 Business Dashboard\n'));
           console.log(chalk.bold('Today'));
-          console.log(`  Sales: ${chalk.green(fmt(data.today.sales))} | Orders: ${data.today.orders}`);
+          console.log(`  Gross: ${chalk.green(fmt(data.today.gross))} | Refunds: ${chalk.red(fmt(data.today.refunds))} | Net: ${chalk.green.bold(fmt(data.today.net))} | Txns: ${data.today.txns}`);
           console.log(chalk.bold('\nThis Week'));
-          console.log(`  Sales: ${chalk.green(fmt(data.week.sales))} | Orders: ${data.week.orders}`);
+          console.log(`  Gross: ${chalk.green(fmt(data.week.gross))} | Refunds: ${chalk.red(fmt(data.week.refunds))} | Net: ${chalk.green.bold(fmt(data.week.net))} | Txns: ${data.week.txns}`);
           console.log(chalk.bold('\nThis Month'));
-          console.log(`  Sales: ${chalk.green(fmt(data.month.sales))} | Orders: ${data.month.orders}`);
+          console.log(`  Gross: ${chalk.green(fmt(data.month.gross))} | Refunds: ${chalk.red(fmt(data.month.refunds))} | Net: ${chalk.green.bold(fmt(data.month.net))} | Txns: ${data.month.txns}`);
           console.log();
         }
       } catch (e: any) { console.error(chalk.red('Error: ' + e.message)); process.exit(1); }
@@ -335,7 +348,7 @@ export function reportsCommands(): Command {
     .argument('<type>', 'Type: orders|items|payments|customers')
     .requiredOption('--output <file>', 'Output file path')
     .option('--format <fmt>', 'Format: json|csv', 'json')
-    .option('--limit <n>', 'Max records', '1000')
+    .option('--limit <n>', 'Max records', '10000')
     .option('--from <date>', 'Start date (for orders/payments)')
     .option('--to <date>', 'End date')
     .action(async (type: string, opts) => {
@@ -344,20 +357,19 @@ export function reportsCommands(): Command {
         const fs = await import('fs');
         let data: any[];
 
-        const fromMs = opts.from ? new Date(opts.from).getTime() : 0;
-        const toMs = opts.to ? new Date(opts.to).getTime() + 86400000 : Date.now() + 86400000;
+        const fromMs = opts.from ? new Date(opts.from).getTime() : undefined;
+        const toMs = opts.to ? new Date(opts.to).getTime() + 86400000 : undefined;
 
+        console.log(chalk.dim(`Fetching ${type}...`));
         switch (type) {
           case 'orders':
-            data = (await client.listOrders({ limit: +opts.limit }))
-              .filter(o => (o.createdTime || 0) >= fromMs && (o.createdTime || 0) < toMs);
+            data = await client.listAllOrders({ fromMs, toMs, limit: +opts.limit });
             break;
           case 'items':
             data = await client.listItems({ limit: +opts.limit });
             break;
           case 'payments':
-            const p = await client.request<any>('GET', `/v3/merchants/{mId}/payments?limit=${opts.limit}`);
-            data = (p.elements || []).filter((x: any) => (x.createdTime || 0) >= fromMs && (x.createdTime || 0) < toMs);
+            data = await client.listAllPayments({ fromMs, toMs, limit: +opts.limit });
             break;
           case 'customers':
             const c = await client.request<any>('GET', `/v3/merchants/{mId}/customers?limit=${opts.limit}`);
@@ -403,11 +415,11 @@ export function reportsCommands(): Command {
         });
         categories['uncategorized'] = { name: 'Uncategorized', sales: 0, orders: 0, items: 0 };
 
-        // Get orders with line items
-        const orders = (await client.listOrders({ limit: 1000 }))
-          .filter(o => (o.createdTime || 0) >= fromMs && (o.createdTime || 0) < toMs);
+        console.log(chalk.dim('Fetching orders with line items (limited to 300 for speed)...'));
+        const orders = await client.listAllOrders({ fromMs, toMs, limit: 300 });
 
         let totalSales = 0;
+        let processed = 0;
         for (const order of orders) {
           try {
             const details = await client.request<any>('GET', `/v3/merchants/{mId}/orders/${order.id}?expand=lineItems.item`);
@@ -418,7 +430,6 @@ export function reportsCommands(): Command {
               const price = li.price || 0;
               totalSales += price;
               
-              // Get item's category
               let catId = 'uncategorized';
               if (li.item?.id) {
                 try {
@@ -443,8 +454,12 @@ export function reportsCommands(): Command {
             orderCategories.forEach(cid => {
               if (categories[cid]) categories[cid].orders += 1;
             });
+            
+            processed++;
+            if (processed % 50 === 0) process.stdout.write(chalk.dim(`\rProcessed ${processed}/${orders.length}...`));
           } catch { /* skip orders without line items */ }
         }
+        console.log('');
 
         const sorted = Object.values(categories)
           .filter(c => c.sales > 0)
@@ -483,26 +498,27 @@ export function reportsCommands(): Command {
         const p2From = new Date(opts.period2From).getTime();
         const p2To = new Date(opts.period2To).getTime() + 86400000;
 
-        const allOrders = await client.listOrders({ limit: 1000 });
+        console.log(chalk.dim('Fetching payments for both periods...'));
+        const [period1, period2] = await Promise.all([
+          client.listAllPayments({ fromMs: p1From, toMs: p1To }),
+          client.listAllPayments({ fromMs: p2From, toMs: p2To })
+        ]);
 
-        const period1 = allOrders.filter(o => (o.createdTime || 0) >= p1From && (o.createdTime || 0) < p1To);
-        const period2 = allOrders.filter(o => (o.createdTime || 0) >= p2From && (o.createdTime || 0) < p2To);
-
-        const p1Sales = period1.reduce((s, o) => s + (o.total || 0), 0);
-        const p2Sales = period2.reduce((s, o) => s + (o.total || 0), 0);
-        const p1Orders = period1.length;
-        const p2Orders = period2.length;
-        const p1Avg = p1Orders > 0 ? p1Sales / p1Orders : 0;
-        const p2Avg = p2Orders > 0 ? p2Sales / p2Orders : 0;
+        const p1Sales = period1.reduce((s, p) => s + (p.amount || 0), 0);
+        const p2Sales = period2.reduce((s, p) => s + (p.amount || 0), 0);
+        const p1Txns = period1.length;
+        const p2Txns = period2.length;
+        const p1Avg = p1Txns > 0 ? p1Sales / p1Txns : 0;
+        const p2Avg = p2Txns > 0 ? p2Sales / p2Txns : 0;
 
         const salesChange = p2Sales > 0 ? ((p1Sales - p2Sales) / p2Sales) * 100 : 0;
-        const ordersChange = p2Orders > 0 ? ((p1Orders - p2Orders) / p2Orders) * 100 : 0;
+        const txnsChange = p2Txns > 0 ? ((p1Txns - p2Txns) / p2Txns) * 100 : 0;
         const avgChange = p2Avg > 0 ? ((p1Avg - p2Avg) / p2Avg) * 100 : 0;
 
         const data = {
-          period1: { from: opts.period1From, to: opts.period1To, sales: p1Sales, orders: p1Orders, avgOrder: p1Avg },
-          period2: { from: opts.period2From, to: opts.period2To, sales: p2Sales, orders: p2Orders, avgOrder: p2Avg },
-          changes: { sales: salesChange, orders: ordersChange, avgOrder: avgChange }
+          period1: { from: opts.period1From, to: opts.period1To, sales: p1Sales, txns: p1Txns, avgTxn: p1Avg },
+          period2: { from: opts.period2From, to: opts.period2To, sales: p2Sales, txns: p2Txns, avgTxn: p2Avg },
+          changes: { sales: salesChange, txns: txnsChange, avgTxn: avgChange }
         };
 
         if (opts.output === 'json') {
@@ -515,8 +531,8 @@ export function reportsCommands(): Command {
           console.log(chalk.dim('─'.repeat(75)));
           console.log(`${'Dates'.padEnd(15)} | ${(opts.period1From + ' to ' + opts.period1To).padEnd(18)} | ${(opts.period2From + ' to ' + opts.period2To).padEnd(18)} |`);
           console.log(`${'Total Sales'.padEnd(15)} | ${fmt(p1Sales).padStart(18)} | ${fmt(p2Sales).padStart(18)} | ${arrow(salesChange)}`);
-          console.log(`${'Order Count'.padEnd(15)} | ${String(p1Orders).padStart(18)} | ${String(p2Orders).padStart(18)} | ${arrow(ordersChange)}`);
-          console.log(`${'Avg Order'.padEnd(15)} | ${fmt(p1Avg).padStart(18)} | ${fmt(p2Avg).padStart(18)} | ${arrow(avgChange)}`);
+          console.log(`${'Transactions'.padEnd(15)} | ${String(p1Txns).padStart(18)} | ${String(p2Txns).padStart(18)} | ${arrow(txnsChange)}`);
+          console.log(`${'Avg Txn'.padEnd(15)} | ${fmt(p1Avg).padStart(18)} | ${fmt(p2Avg).padStart(18)} | ${arrow(avgChange)}`);
           console.log();
 
           if (salesChange > 0) {
@@ -543,33 +559,26 @@ export function reportsCommands(): Command {
 
         // Get employees
         const empResp = await client.request<any>('GET', '/v3/merchants/{mId}/employees?limit=100');
-        const employees: Record<string, { name: string; sales: number; orders: number; avgOrder: number }> = {};
+        const employees: Record<string, { name: string; sales: number; txns: number; tips: number }> = {};
         (empResp.elements || []).forEach((e: any) => {
-          employees[e.id] = { name: e.name || 'Unknown', sales: 0, orders: 0, avgOrder: 0 };
+          employees[e.id] = { name: e.name || 'Unknown', sales: 0, txns: 0, tips: 0 };
         });
 
-        // Get orders
-        const orders = (await client.listOrders({ limit: 1000 }))
-          .filter(o => (o.createdTime || 0) >= fromMs && (o.createdTime || 0) < toMs);
+        console.log(chalk.dim('Fetching payments...'));
+        const payments = await client.listAllPayments({ fromMs, toMs });
 
         let totalSales = 0;
-        for (const order of orders) {
-          try {
-            const details = await client.request<any>('GET', `/v3/merchants/{mId}/orders/${order.id}`);
-            const empId = details.employee?.id;
-            const amount = order.total || 0;
-            totalSales += amount;
+        payments.forEach(p => {
+          const empId = p.employee?.id;
+          const amount = p.amount || 0;
+          const tips = p.tipAmount || 0;
+          totalSales += amount;
 
-            if (empId && employees[empId]) {
-              employees[empId].sales += amount;
-              employees[empId].orders += 1;
-            }
-          } catch { /* skip */ }
-        }
-
-        // Calculate averages
-        Object.values(employees).forEach(e => {
-          e.avgOrder = e.orders > 0 ? e.sales / e.orders : 0;
+          if (empId && employees[empId]) {
+            employees[empId].sales += amount;
+            employees[empId].txns += 1;
+            employees[empId].tips += tips;
+          }
         });
 
         const sorted = Object.values(employees)
@@ -580,14 +589,15 @@ export function reportsCommands(): Command {
           console.log(JSON.stringify({ totalSales, employees: sorted }, null, 2));
         } else {
           console.log(chalk.bold.cyan('\n👥 Sales by Employee\n'));
-          console.log(chalk.dim('Employee                      | Sales      | Orders | Avg Order | Share'));
-          console.log(chalk.dim('─'.repeat(75)));
+          console.log(chalk.dim('Employee                      | Sales       | Txns | Avg Txn   | Tips    | Share'));
+          console.log(chalk.dim('─'.repeat(85)));
           sorted.forEach((e, i) => {
             const medal = i === 0 ? '🥇 ' : i === 1 ? '🥈 ' : i === 2 ? '🥉 ' : '   ';
-            console.log(`${medal}${e.name.slice(0, 26).padEnd(26)} | ${fmt(e.sales).padStart(10)} | ${String(e.orders).padStart(6)} | ${fmt(e.avgOrder).padStart(9)} | ${pct(e.sales, totalSales)}`);
+            const avg = e.txns > 0 ? e.sales / e.txns : 0;
+            console.log(`${medal}${e.name.slice(0, 26).padEnd(26)} | ${fmt(e.sales).padStart(11)} | ${String(e.txns).padStart(4)} | ${fmt(avg).padStart(9)} | ${fmt(e.tips).padStart(7)} | ${pct(e.sales, totalSales)}`);
           });
-          console.log(chalk.dim('─'.repeat(75)));
-          console.log(`${'   TOTAL'.padEnd(29)} | ${fmt(totalSales).padStart(10)} | ${String(orders.length).padStart(6)} |`);
+          console.log(chalk.dim('─'.repeat(85)));
+          console.log(`${'   TOTAL'.padEnd(29)} | ${fmt(totalSales).padStart(11)} | ${String(payments.length).padStart(4)} |`);
           console.log();
         }
       } catch (e: any) { console.error(chalk.red('Error: ' + e.message)); process.exit(1); }
