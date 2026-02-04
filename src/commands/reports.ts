@@ -383,5 +383,215 @@ export function reportsCommands(): Command {
       } catch (e: any) { console.error(chalk.red('Error: ' + e.message)); process.exit(1); }
     });
 
+  // Categories breakdown
+  reports.command('categories')
+    .description('Sales breakdown by category')
+    .option('--from <date>', 'Start date')
+    .option('--to <date>', 'End date')
+    .option('--output <format>', 'Output: table|json', 'table')
+    .action(async (opts) => {
+      try {
+        const client = new CloverClient();
+        const fromMs = opts.from ? new Date(opts.from).getTime() : Date.now() - 30 * 86400000;
+        const toMs = opts.to ? new Date(opts.to).getTime() + 86400000 : Date.now() + 86400000;
+
+        // Get categories
+        const catResp = await client.request<any>('GET', '/v3/merchants/{mId}/categories?limit=500');
+        const categories: Record<string, { name: string; sales: number; orders: number; items: number }> = {};
+        (catResp.elements || []).forEach((c: any) => {
+          categories[c.id] = { name: c.name, sales: 0, orders: 0, items: 0 };
+        });
+        categories['uncategorized'] = { name: 'Uncategorized', sales: 0, orders: 0, items: 0 };
+
+        // Get orders with line items
+        const orders = (await client.listOrders({ limit: 1000 }))
+          .filter(o => (o.createdTime || 0) >= fromMs && (o.createdTime || 0) < toMs);
+
+        let totalSales = 0;
+        for (const order of orders) {
+          try {
+            const details = await client.request<any>('GET', `/v3/merchants/{mId}/orders/${order.id}?expand=lineItems.item`);
+            const lineItems = details.lineItems?.elements || [];
+            const orderCategories = new Set<string>();
+
+            for (const li of lineItems) {
+              const price = li.price || 0;
+              totalSales += price;
+              
+              // Get item's category
+              let catId = 'uncategorized';
+              if (li.item?.id) {
+                try {
+                  const itemCats = await client.request<any>('GET', `/v3/merchants/{mId}/items/${li.item.id}/categories`);
+                  if (itemCats.elements?.length > 0) {
+                    catId = itemCats.elements[0].id;
+                  }
+                } catch { /* ignore */ }
+              }
+
+              if (categories[catId]) {
+                categories[catId].sales += price;
+                categories[catId].items += 1;
+                orderCategories.add(catId);
+              } else {
+                categories['uncategorized'].sales += price;
+                categories['uncategorized'].items += 1;
+                orderCategories.add('uncategorized');
+              }
+            }
+
+            orderCategories.forEach(cid => {
+              if (categories[cid]) categories[cid].orders += 1;
+            });
+          } catch { /* skip orders without line items */ }
+        }
+
+        const sorted = Object.values(categories)
+          .filter(c => c.sales > 0)
+          .sort((a, b) => b.sales - a.sales);
+
+        if (opts.output === 'json') {
+          console.log(JSON.stringify({ totalSales, categories: sorted }, null, 2));
+        } else {
+          console.log(chalk.bold.cyan('\n📦 Sales by Category\n'));
+          console.log(chalk.dim('Category                      | Sales      | Orders | Items | Share'));
+          console.log(chalk.dim('─'.repeat(70)));
+          sorted.forEach(c => {
+            console.log(`${c.name.slice(0, 29).padEnd(29)} | ${fmt(c.sales).padStart(10)} | ${String(c.orders).padStart(6)} | ${String(c.items).padStart(5)} | ${pct(c.sales, totalSales)}`);
+          });
+          console.log(chalk.dim('─'.repeat(70)));
+          console.log(`${'TOTAL'.padEnd(29)} | ${fmt(totalSales).padStart(10)} |`);
+          console.log();
+        }
+      } catch (e: any) { console.error(chalk.red('Error: ' + e.message)); process.exit(1); }
+    });
+
+  // Period comparison (YoY, MoM, etc.)
+  reports.command('compare')
+    .description('Compare two time periods (e.g., YoY, MoM)')
+    .requiredOption('--period1-from <date>', 'Period 1 start')
+    .requiredOption('--period1-to <date>', 'Period 1 end')
+    .requiredOption('--period2-from <date>', 'Period 2 start')
+    .requiredOption('--period2-to <date>', 'Period 2 end')
+    .option('--output <format>', 'Output: table|json', 'table')
+    .action(async (opts) => {
+      try {
+        const client = new CloverClient();
+        
+        const p1From = new Date(opts.period1From).getTime();
+        const p1To = new Date(opts.period1To).getTime() + 86400000;
+        const p2From = new Date(opts.period2From).getTime();
+        const p2To = new Date(opts.period2To).getTime() + 86400000;
+
+        const allOrders = await client.listOrders({ limit: 1000 });
+
+        const period1 = allOrders.filter(o => (o.createdTime || 0) >= p1From && (o.createdTime || 0) < p1To);
+        const period2 = allOrders.filter(o => (o.createdTime || 0) >= p2From && (o.createdTime || 0) < p2To);
+
+        const p1Sales = period1.reduce((s, o) => s + (o.total || 0), 0);
+        const p2Sales = period2.reduce((s, o) => s + (o.total || 0), 0);
+        const p1Orders = period1.length;
+        const p2Orders = period2.length;
+        const p1Avg = p1Orders > 0 ? p1Sales / p1Orders : 0;
+        const p2Avg = p2Orders > 0 ? p2Sales / p2Orders : 0;
+
+        const salesChange = p2Sales > 0 ? ((p1Sales - p2Sales) / p2Sales) * 100 : 0;
+        const ordersChange = p2Orders > 0 ? ((p1Orders - p2Orders) / p2Orders) * 100 : 0;
+        const avgChange = p2Avg > 0 ? ((p1Avg - p2Avg) / p2Avg) * 100 : 0;
+
+        const data = {
+          period1: { from: opts.period1From, to: opts.period1To, sales: p1Sales, orders: p1Orders, avgOrder: p1Avg },
+          period2: { from: opts.period2From, to: opts.period2To, sales: p2Sales, orders: p2Orders, avgOrder: p2Avg },
+          changes: { sales: salesChange, orders: ordersChange, avgOrder: avgChange }
+        };
+
+        if (opts.output === 'json') {
+          console.log(JSON.stringify(data, null, 2));
+        } else {
+          const arrow = (n: number) => n > 0 ? chalk.green('↑ +' + n.toFixed(1) + '%') : n < 0 ? chalk.red('↓ ' + n.toFixed(1) + '%') : chalk.gray('→ 0%');
+          
+          console.log(chalk.bold.cyan('\n📈 Period Comparison\n'));
+          console.log(chalk.dim('Metric          | Period 1           | Period 2           | Change'));
+          console.log(chalk.dim('─'.repeat(75)));
+          console.log(`${'Dates'.padEnd(15)} | ${(opts.period1From + ' to ' + opts.period1To).padEnd(18)} | ${(opts.period2From + ' to ' + opts.period2To).padEnd(18)} |`);
+          console.log(`${'Total Sales'.padEnd(15)} | ${fmt(p1Sales).padStart(18)} | ${fmt(p2Sales).padStart(18)} | ${arrow(salesChange)}`);
+          console.log(`${'Order Count'.padEnd(15)} | ${String(p1Orders).padStart(18)} | ${String(p2Orders).padStart(18)} | ${arrow(ordersChange)}`);
+          console.log(`${'Avg Order'.padEnd(15)} | ${fmt(p1Avg).padStart(18)} | ${fmt(p2Avg).padStart(18)} | ${arrow(avgChange)}`);
+          console.log();
+
+          if (salesChange > 0) {
+            console.log(chalk.green(`🎉 Sales up ${salesChange.toFixed(1)}% compared to previous period!`));
+          } else if (salesChange < 0) {
+            console.log(chalk.yellow(`⚠️  Sales down ${Math.abs(salesChange).toFixed(1)}% compared to previous period.`));
+          }
+          console.log();
+        }
+      } catch (e: any) { console.error(chalk.red('Error: ' + e.message)); process.exit(1); }
+    });
+
+  // Employee sales report
+  reports.command('employees')
+    .description('Sales breakdown by employee')
+    .option('--from <date>', 'Start date')
+    .option('--to <date>', 'End date')
+    .option('--output <format>', 'Output: table|json', 'table')
+    .action(async (opts) => {
+      try {
+        const client = new CloverClient();
+        const fromMs = opts.from ? new Date(opts.from).getTime() : Date.now() - 30 * 86400000;
+        const toMs = opts.to ? new Date(opts.to).getTime() + 86400000 : Date.now() + 86400000;
+
+        // Get employees
+        const empResp = await client.request<any>('GET', '/v3/merchants/{mId}/employees?limit=100');
+        const employees: Record<string, { name: string; sales: number; orders: number; avgOrder: number }> = {};
+        (empResp.elements || []).forEach((e: any) => {
+          employees[e.id] = { name: e.name || 'Unknown', sales: 0, orders: 0, avgOrder: 0 };
+        });
+
+        // Get orders
+        const orders = (await client.listOrders({ limit: 1000 }))
+          .filter(o => (o.createdTime || 0) >= fromMs && (o.createdTime || 0) < toMs);
+
+        let totalSales = 0;
+        for (const order of orders) {
+          try {
+            const details = await client.request<any>('GET', `/v3/merchants/{mId}/orders/${order.id}`);
+            const empId = details.employee?.id;
+            const amount = order.total || 0;
+            totalSales += amount;
+
+            if (empId && employees[empId]) {
+              employees[empId].sales += amount;
+              employees[empId].orders += 1;
+            }
+          } catch { /* skip */ }
+        }
+
+        // Calculate averages
+        Object.values(employees).forEach(e => {
+          e.avgOrder = e.orders > 0 ? e.sales / e.orders : 0;
+        });
+
+        const sorted = Object.values(employees)
+          .filter(e => e.sales > 0)
+          .sort((a, b) => b.sales - a.sales);
+
+        if (opts.output === 'json') {
+          console.log(JSON.stringify({ totalSales, employees: sorted }, null, 2));
+        } else {
+          console.log(chalk.bold.cyan('\n👥 Sales by Employee\n'));
+          console.log(chalk.dim('Employee                      | Sales      | Orders | Avg Order | Share'));
+          console.log(chalk.dim('─'.repeat(75)));
+          sorted.forEach((e, i) => {
+            const medal = i === 0 ? '🥇 ' : i === 1 ? '🥈 ' : i === 2 ? '🥉 ' : '   ';
+            console.log(`${medal}${e.name.slice(0, 26).padEnd(26)} | ${fmt(e.sales).padStart(10)} | ${String(e.orders).padStart(6)} | ${fmt(e.avgOrder).padStart(9)} | ${pct(e.sales, totalSales)}`);
+          });
+          console.log(chalk.dim('─'.repeat(75)));
+          console.log(`${'   TOTAL'.padEnd(29)} | ${fmt(totalSales).padStart(10)} | ${String(orders.length).padStart(6)} |`);
+          console.log();
+        }
+      } catch (e: any) { console.error(chalk.red('Error: ' + e.message)); process.exit(1); }
+    });
+
   return reports;
 }
