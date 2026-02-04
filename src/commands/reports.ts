@@ -478,12 +478,20 @@ export function reportsCommands(): Command {
     .description('Sales breakdown by category')
     .option('--from <date>', 'Start date')
     .option('--to <date>', 'End date')
+    .option('--period <period>', 'Period shortcut: today, yesterday, this-week, last-week, this-month, last-month, mtd, ytd')
     .option('--output <format>', 'Output: table|json', 'table')
     .action(async (opts) => {
       try {
         const client = new CloverClient();
-        const fromMs = opts.from ? new Date(opts.from).getTime() : Date.now() - 30 * 86400000;
-        const toMs = opts.to ? new Date(opts.to).getTime() + 86400000 : Date.now() + 86400000;
+        
+        let fromMs: number, toMs: number;
+        if (opts.period) {
+          const p = parsePeriod(opts.period);
+          fromMs = p.fromMs; toMs = p.toMs;
+        } else {
+          fromMs = opts.from ? new Date(opts.from).getTime() : Date.now() - 30 * 86400000;
+          toMs = opts.to ? new Date(opts.to).getTime() + 86400000 : Date.now() + 86400000;
+        }
 
         // Get categories
         const catResp = await client.request<any>('GET', '/v3/merchants/{mId}/categories?limit=500');
@@ -628,12 +636,20 @@ export function reportsCommands(): Command {
     .description('Sales breakdown by employee')
     .option('--from <date>', 'Start date')
     .option('--to <date>', 'End date')
+    .option('--period <period>', 'Period shortcut: today, yesterday, this-week, last-week, this-month, last-month, mtd, ytd')
     .option('--output <format>', 'Output: table|json', 'table')
     .action(async (opts) => {
       try {
         const client = new CloverClient();
-        const fromMs = opts.from ? new Date(opts.from).getTime() : Date.now() - 30 * 86400000;
-        const toMs = opts.to ? new Date(opts.to).getTime() + 86400000 : Date.now() + 86400000;
+        
+        let fromMs: number, toMs: number;
+        if (opts.period) {
+          const p = parsePeriod(opts.period);
+          fromMs = p.fromMs; toMs = p.toMs;
+        } else {
+          fromMs = opts.from ? new Date(opts.from).getTime() : Date.now() - 30 * 86400000;
+          toMs = opts.to ? new Date(opts.to).getTime() + 86400000 : Date.now() + 86400000;
+        }
 
         // Get employees
         const empResp = await client.request<any>('GET', '/v3/merchants/{mId}/employees?limit=100');

@@ -1,6 +1,6 @@
 {
   "name": "@versatly/clovercli",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Powerful CLI for Clover POS API - inventory, orders, payments, analytics",
   "main": "dist/index.js",
   "type": "module",

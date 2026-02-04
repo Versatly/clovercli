@@ -12,7 +12,7 @@ import { reportsCommands } from './commands/reports.js';
 import { discountsCommands } from './commands/discounts.js';
 
 const program = new Command();
-program.name('clovercli').description('Clover POS CLI').version('1.2.0');
+program.name('clovercli').description('Clover POS CLI').version('1.2.1');
 program.addCommand(authCommands());
 program.addCommand(merchantCommands());
 program.addCommand(inventoryCommands());
